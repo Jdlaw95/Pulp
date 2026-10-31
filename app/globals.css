@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@theme {
+  --color-pulp-bg: #FDF6E9;
+  --color-pulp-text: #111111;
+  --color-pulp-green: #6B8E4E;
+  --color-pulp-border: #E5D9C5;
+
+  --font-sans: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-playfair), ui-serif, Georgia, serif;
+
+  --tracking-widest: 0.2em;
+}
+
+body {
+  background-color: #FDF6E9;
+  color: #111111;
+}
