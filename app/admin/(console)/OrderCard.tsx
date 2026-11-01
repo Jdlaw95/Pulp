@@ -20,22 +20,42 @@ function bankLines(bank: Bank | null): string {
   if (!bank || !bank.accountNumber) return "(banking details not set yet, add them in Settings)";
   return [
     bank.name && `Bank: ${bank.name}`,
-    bank.accountName && `Account name: ${bank.accountName}`,
-    `Account number: ${bank.accountNumber}`,
+    bank.accountName && `Name: ${bank.accountName}`,
+    `Account no: ${bank.accountNumber}`,
     bank.branchCode && `Branch code: ${bank.branchCode}`,
   ].filter(Boolean).join("\n");
 }
 
+// WhatsApp shows *text* in bold and _text_ in italics. Blank lines keep the message from reading as one block.
 function whatsappText(o: Order, bank: Bank | null, deposit: number): string {
   const first = o.customer_name.split(" ")[0];
   const when = fmtDate(o.requested_date);
+  const collect = o.pickup_slot ? `${when}, ${o.pickup_slot}` : when;
   switch (o.status) {
     case "pending_payment":
-      return `Hi ${first}! Thanks for your Pulp order ${o.order_ref} for ${when}. To confirm it, please pay your deposit of ${rand(deposit)} (total ${rand(Number(o.total_zar))}) by EFT within 24 hours:\n${bankLines(bank)}\nPayment reference: ${o.order_ref}\n\nSend us your proof of payment here once it is done. Thank you!`;
+      return [
+        `Hi ${first}! \u{1F353} Thanks for your Pulp order.`,
+        "",
+        `*Order ${o.order_ref}*`,
+        formatBreakdown(o),
+        `Collection: ${collect}`,
+        `Total: ${rand(Number(o.total_zar))}`,
+        "",
+        `To confirm it, please pay a *${rand(deposit)} deposit* by EFT within 24 hours.`,
+        "",
+        "*Banking details*",
+        bankLines(bank),
+        `Reference: *${o.order_ref}*`,
+        "",
+        "Send your proof of payment here once it is done and we will confirm your order.",
+        "",
+        "Thank you! \u{1F343}",
+        "_Pulp · Illusion Collection_",
+      ].join("\n");
     case "confirmed":
-      return `Hi ${first}! Your deposit is in and your Pulp order ${o.order_ref} is confirmed for ${when}. We'll let you know when it's ready.`;
+      return `Hi ${first}! \u{1F353}\n\nYour deposit is in and your order *${o.order_ref}* is confirmed for ${collect}.\n\nWe will let you know as soon as it is ready.\n\nThank you! \u{1F343}\n_Pulp · Illusion Collection_`;
     case "ready":
-      return `Hi ${first}! Your Pulp order ${o.order_ref} is ready for collection. When suits you?`;
+      return `Hi ${first}! \u{1F353}\n\nYour order *${o.order_ref}* is ready for collection.\n\nWhen suits you to pop by?\n\n_Pulp · Illusion Collection_`;
     default:
       return `Hi ${first}! A quick note about your Pulp order ${o.order_ref}.`;
   }
