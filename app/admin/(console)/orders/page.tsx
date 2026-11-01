@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireAdmin } from "../../../lib/auth";
 import { getSettings } from "../../../lib/settings";
+import { mergeBank } from "../../../lib/bank";
 import { loadOrders } from "../../data";
 import { STATUSES } from "../../../lib/types";
 import OrderCard from "../OrderCard";
@@ -10,7 +11,9 @@ type SP = { q?: string; status?: string; from?: string; to?: string };
 export default async function OrdersPage({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams;
   const { db } = await requireAdmin();
-  const [orders, settings] = await Promise.all([loadOrders(db, sp), getSettings()]);
+  const [orders, settings, priv] = await Promise.all([loadOrders(db, sp), getSettings(), db.from("shop_private").select("*").eq("id", 1).maybeSingle()]);
+  // Reading the details to send them is allowed; changing them needs the security code (Settings).
+  const bank = mergeBank(priv.data);
   const current = sp.status ?? "all";
 
   const exportQs = new URLSearchParams(Object.entries(sp).filter(([, v]) => v) as [string, string][]).toString();
@@ -53,7 +56,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
         <div className="rounded-xl border border-gray-200 bg-white p-8 text-center text-gray-500">No orders match.</div>
       ) : (
         <div className="space-y-3">
-          {orders.map((o) => <OrderCard key={o.id} order={o} depositPercent={settings.deposit_percent} />)}
+          {orders.map((o) => <OrderCard key={o.id} order={o} depositPercent={settings.deposit_percent} bank={bank} />)}
         </div>
       )}
     </div>

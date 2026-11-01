@@ -11,6 +11,8 @@ import { groupCustomers, validEmail } from "../lib/customers";
 import { mailTransport, sendMailerEmail } from "../lib/email";
 import { unsubUrl } from "../lib/unsub";
 import type { Order } from "../lib/types";
+import { parsePhone, parseSocial, PLATFORMS } from "../lib/contact";
+import { clearUnlocked, hashCode, isUnlocked, setUnlocked, verifyCode } from "../lib/pin";
 
 type Result = { ok: boolean; message?: string };
 
@@ -304,4 +306,108 @@ export async function sendMailer(subject: string, body: string, testOnly: boolea
     }
   }
   return { ok: sent > 0, sent, failed, message: `Sent to ${sent} ${sent === 1 ? "person" : "people"}${failed ? `, ${failed} failed` : ""}.` };
+}
+
+// ---- Contact details (public) ------------------------------------------
+
+export async function saveContact(_prev: Result | null, formData: FormData): Promise<Result> {
+  const { db } = await requireAdmin();
+  const phone = parsePhone(String(formData.get("whatsapp") ?? ""));
+  if (!phone.ok) return { ok: false, message: phone.message };
+  const row: Record<string, string | number> = { id: 1, whatsapp: phone.intl };
+  for (const p of PLATFORMS) {
+    const r = parseSocial(p.key, String(formData.get(p.key) ?? ""));
+    if (!r.ok) return { ok: false, message: r.message };
+    row[`social_${p.key}`] = r.url; // empty string = hidden on the site
+  }
+  const { error } = await db.from("shop_settings").upsert(row);
+  if (error) {
+    const hint = /column|schema cache|relation|does not exist/i.test(error.message) ? " Run supabase/pulp-upgrade.sql in the Supabase SQL editor first." : "";
+    return { ok: false, message: error.message + hint };
+  }
+  revalidatePath("/");
+  revalidatePath("/privacy");
+  refresh();
+  return { ok: true, message: "Saved. The website is updated." };
+}
+
+// ---- Bank details (locked behind a code) -------------------------------
+
+type Priv = { pin_hash: string | null; pin_failed: number | null; pin_locked_until: string | null };
+type Db = Awaited<ReturnType<typeof requireAdmin>>["db"];
+
+const SQL_HINT = " Run supabase/pulp-upgrade.sql in the Supabase SQL editor first.";
+const MAX_TRIES = 5;
+
+async function loadPriv(db: Db): Promise<{ row: Priv | null; error: string | null }> {
+  const { data, error } = await db.from("shop_private").select("pin_hash, pin_failed, pin_locked_until").eq("id", 1).maybeSingle();
+  return { row: (data as Priv | null) ?? null, error: error?.message ?? null };
+}
+
+/** Checks a code with a lockout after repeated wrong tries. Returns null when the code is right, otherwise a message. */
+async function checkCode(db: Db, row: Priv | null, code: string): Promise<string | null> {
+  if (!row?.pin_hash) return "No security code has been set yet.";
+  const until = row.pin_locked_until ? new Date(row.pin_locked_until).getTime() : 0;
+  if (until > Date.now()) return `Too many wrong tries. Try again in ${Math.ceil((until - Date.now()) / 60000)} minutes.`;
+  if (verifyCode(code, row.pin_hash)) {
+    if (row.pin_failed) await db.from("shop_private").update({ pin_failed: 0, pin_locked_until: null }).eq("id", 1);
+    return null;
+  }
+  const failed = (row.pin_failed ?? 0) + 1;
+  await db.from("shop_private").update({ pin_failed: failed >= MAX_TRIES ? 0 : failed, pin_locked_until: failed >= MAX_TRIES ? new Date(Date.now() + 15 * 60_000).toISOString() : null }).eq("id", 1);
+  return failed >= MAX_TRIES ? "Too many wrong tries. Locked for 15 minutes." : `That code is not right. ${MAX_TRIES - failed} ${MAX_TRIES - failed === 1 ? "try" : "tries"} left.`;
+}
+
+export async function unlockBank(code: string): Promise<Result> {
+  const { db, user } = await requireAdmin();
+  const { row, error } = await loadPriv(db);
+  if (error) return { ok: false, message: error + SQL_HINT };
+  const bad = await checkCode(db, row, code);
+  if (bad) return { ok: false, message: bad };
+  await setUnlocked(row!.pin_hash!, user.id);
+  refresh();
+  return { ok: true };
+}
+
+export async function lockBank(): Promise<Result> {
+  await requireAdmin();
+  await clearUnlocked();
+  refresh();
+  return { ok: true };
+}
+
+/** First time: current is ignored. After that the current code must be right. */
+export async function setBankCode(current: string, next: string): Promise<Result> {
+  const { db, user } = await requireAdmin();
+  if (next.length < 6 || next.length > 64) return { ok: false, message: "Your code needs at least 6 characters." };
+  const { row, error } = await loadPriv(db);
+  if (error) return { ok: false, message: error + SQL_HINT };
+  if (row?.pin_hash) {
+    const bad = await checkCode(db, row, current);
+    if (bad) return { ok: false, message: bad };
+  }
+  const hash = hashCode(next);
+  const { error: e2 } = await db.from("shop_private").upsert({ id: 1, pin_hash: hash, pin_failed: 0, pin_locked_until: null });
+  if (e2) return { ok: false, message: e2.message + SQL_HINT };
+  await setUnlocked(hash, user.id);
+  refresh();
+  return { ok: true };
+}
+
+export async function saveBank(input: { name: string; accountName: string; accountNumber: string; branchCode: string }): Promise<Result> {
+  const { db, user } = await requireAdmin();
+  const { row, error } = await loadPriv(db);
+  if (error) return { ok: false, message: error + SQL_HINT };
+  if (!(await isUnlocked(row?.pin_hash, user.id))) return { ok: false, message: "Locked. Enter your security code again." };
+  const clean = (v: string, max: number) => v.trim().slice(0, max);
+  const name = clean(input.name, 60);
+  const accountName = clean(input.accountName, 80);
+  const accountNumber = clean(input.accountNumber, 24);
+  const branchCode = clean(input.branchCode, 12);
+  if (!/^[0-9 -]{4,24}$/.test(accountNumber)) return { ok: false, message: "Account number should be digits only." };
+  if (branchCode && !/^[0-9A-Za-z -]{2,12}$/.test(branchCode)) return { ok: false, message: "Branch code does not look right." };
+  const { error: e2 } = await db.from("shop_private").upsert({ id: 1, bank_name: name, bank_account_name: accountName, bank_account_number: accountNumber, bank_branch_code: branchCode });
+  if (e2) return { ok: false, message: e2.message + SQL_HINT };
+  refresh();
+  return { ok: true, message: "Saved. New orders will email these details." };
 }

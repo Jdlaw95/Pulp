@@ -1,7 +1,7 @@
 import { publicDb } from "./lib/supabase";
 import { getSettings, getBlackoutDates } from "./lib/settings";
 import { earliestOrderDate } from "./lib/dates";
-import { SHOP, SOCIALS, waLink } from "./lib/config";
+import { SHOP, waLink } from "./lib/config";
 import { OrderProvider, OrderButton } from "./OrderLauncher";
 import SocialIcon from "./SocialIcon";
 import type { Product } from "./lib/types";
@@ -38,7 +38,7 @@ export default async function Home() {
     ["Choose", "Pick a box and your flavours."],
     ["Order", "Tell us when you would like to collect."],
     ["Pay a deposit", `Pay ${settings.deposit_percent}% by EFT within 24 hours to confirm.`],
-    ["Collect", "We message you on WhatsApp to arrange pick-up."],
+    ["Collect", "We message you on WhatsApp to arrange pick-up / delivery (Uber package)."],
   ];
 
   const faqs = [
@@ -58,6 +58,7 @@ export default async function Home() {
       earliestDate={earliest}
       blackouts={blackouts}
       ordersOpen={settings.orders_open}
+      whatsappIntl={settings.contact.whatsappIntl}
     >
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-5">
         <span className="font-serif text-xl tracking-[0.25em]">PULP</span>
@@ -160,10 +161,10 @@ export default async function Home() {
 
       <footer className="border-t border-pulp-border px-6 py-10 text-center font-serif text-sm">
         <p className="mb-1"><a href={`mailto:${SHOP.email}`} className="hover:underline">{SHOP.email}</a></p>
-        <p className="mb-4">WhatsApp: <a href={waLink("Hi Pulp!")} target="_blank" rel="noopener noreferrer" className="hover:underline">{SHOP.whatsappDisplay}</a></p>
-        {SOCIALS.length > 0 && (
+        <p className="mb-4">WhatsApp: <a href={waLink("Hi Pulp!", settings.contact.whatsappIntl)} target="_blank" rel="noopener noreferrer" className="hover:underline">{settings.contact.whatsappDisplay}</a></p>
+        {settings.contact.socials.length > 0 && (
           <div className="mb-5 flex justify-center gap-3">
-            {SOCIALS.map((s) => (
+            {settings.contact.socials.map((s) => (
               <a
                 key={s.label}
                 href={s.url}

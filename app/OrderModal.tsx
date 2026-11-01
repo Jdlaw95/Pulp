@@ -15,6 +15,7 @@ type Props = {
   depositPercent: number;
   earliestDate: string;
   blackouts: { date: string; reason: string | null }[];
+  whatsappIntl: string;
 };
 
 type Step = 1 | 2 | 3;
@@ -24,7 +25,7 @@ const inputCls =
   "w-full rounded-lg border border-pulp-border bg-white px-3 py-3 text-base outline-none transition focus:border-pulp-text focus:ring-2 focus:ring-pulp-text/10";
 const rand = (n: number) => "R" + (Number.isInteger(n) ? n : n.toFixed(2));
 
-export default function OrderModal({ isOpen, onClose, products, prices, slots, depositPercent, earliestDate, blackouts }: Props) {
+export default function OrderModal({ isOpen, onClose, products, prices, slots, depositPercent, earliestDate, blackouts, whatsappIntl }: Props) {
   const [step, setStep] = useState<Step>(1);
   const [mode, setMode] = useState<OrderMode>("Trio");
   const [flavors, setFlavors] = useState<Record<string, number>>({});
@@ -142,16 +143,14 @@ export default function OrderModal({ isOpen, onClose, products, prices, slots, d
             <p className="mb-5 text-sm text-gray-600">Your reference is</p>
             <p className="mb-5 inline-block rounded-lg bg-white px-4 py-2 font-mono text-lg font-bold tracking-wider">{result.orderRef}</p>
             <div className="mb-6 rounded-xl border border-pulp-border bg-white p-4 text-left text-sm leading-relaxed">
-              <p className="mb-1 font-medium">Next step: pay your {depositPercent}% deposit of {rand(result.deposit)} within 24 hours.</p>
+              <p className="mb-2 font-medium">Next step: we will WhatsApp you our banking details.</p>
               <p className="text-gray-600">
-                {result.emailSent
-                  ? "We emailed you the banking details. Use your order reference as the payment reference. We confirm your order once the deposit arrives."
-                  : "We could not send your email just now. Tap the button below and we will send the banking details on WhatsApp."}
+                Once you have them, pay your {depositPercent}% deposit of {rand(result.deposit)} within 24 hours and use <strong>{result.orderRef}</strong> as the payment reference. We confirm your order when the deposit arrives.
               </p>
             </div>
             <div className="flex flex-col gap-3">
               <a
-                href={waLink(`Hi Pulp! I just placed order ${result.orderRef}.`)}
+                href={waLink(`Hi Pulp! I just placed order ${result.orderRef}.`, whatsappIntl)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rounded-full bg-pulp-green px-6 py-3 text-sm font-medium uppercase tracking-widest text-white transition hover:opacity-90"

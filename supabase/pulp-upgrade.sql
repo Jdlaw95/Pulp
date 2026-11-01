@@ -57,3 +57,25 @@ create policy "orders admin insert" on public.orders for insert to authenticated
 create policy "orders admin delete" on public.orders for delete to authenticated using (true);
 create policy "order_items admin insert" on public.order_items for insert to authenticated with check (true);
 create policy "order_items admin delete" on public.order_items for delete to authenticated using (true);
+
+-- Contact details the admin can change (public, shown on the website).
+alter table public.shop_settings add column if not exists whatsapp text;
+alter table public.shop_settings add column if not exists social_instagram text;
+alter table public.shop_settings add column if not exists social_facebook text;
+alter table public.shop_settings add column if not exists social_tiktok text;
+
+-- Bank details and the security code. NOT readable by the public: only a signed-in admin (or the service key).
+create table if not exists public.shop_private (
+  id int primary key default 1 check (id = 1),
+  bank_name text,
+  bank_account_name text,
+  bank_account_number text,
+  bank_branch_code text,
+  pin_hash text,
+  pin_failed int not null default 0,
+  pin_locked_until timestamptz
+);
+alter table public.shop_private enable row level security;
+drop policy if exists "private admin only" on public.shop_private;
+create policy "private admin only" on public.shop_private for all to authenticated using (true) with check (true);
+-- Forgot the security code? Run:  update public.shop_private set pin_hash = null where id = 1;

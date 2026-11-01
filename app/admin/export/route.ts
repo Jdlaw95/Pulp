@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { hasServiceKey, serverDb } from "../../lib/supabase";
 import { isAllowed, userDb } from "../../lib/auth";
 import { loadOrders } from "../data";
 import { formatBreakdown, statusLabel } from "../../lib/types";
@@ -11,11 +12,12 @@ const cell = (v: unknown) => {
 };
 
 export async function GET(request: Request) {
-  const db = await userDb();
+  const authDb = await userDb();
   const {
     data: { user },
-  } = await db.auth.getUser();
+  } = await authDb.auth.getUser();
   if (!user || !isAllowed(user.email)) return new NextResponse("Unauthorized", { status: 401 });
+  const db = hasServiceKey() ? serverDb() : authDb;
 
   const sp = new URL(request.url).searchParams;
   const orders = await loadOrders(db, {

@@ -2,6 +2,7 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createServerClient } from "@supabase/ssr";
+import { hasServiceKey, serverDb } from "./supabase";
 
 /** Supabase client that acts as the logged-in admin (row-level security applies). */
 export async function userDb() {
@@ -47,5 +48,7 @@ export const requireAdmin = cache(async () => {
     console.error(`[admin] ${user.email} is signed in but is not listed in ADMIN_EMAILS`);
     redirect("/admin/login?reason=not-allowed");
   }
-  return { db, user };
+  // The login is checked above, on the server. Data is then read and written with the service key, so it does not depend on
+  // row-level-security rules matching the logged-in user. Without the key it falls back to the user's own session.
+  return { db: hasServiceKey() ? serverDb() : db, user };
 });

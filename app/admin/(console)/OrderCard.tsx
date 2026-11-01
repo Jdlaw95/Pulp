@@ -6,6 +6,7 @@ import { deleteOrder, setOrderStatus } from "../actions";
 import { NEXT_STATUS, STATUSES, formatBreakdown, rand, type Order } from "../../lib/types";
 import { toIntlPhone, waLink } from "../../lib/config";
 import { fmtDate } from "../../lib/dates";
+import type { Bank } from "../../lib/bank";
 
 const colors: Record<string, string> = {
   pending_payment: "bg-amber-100 text-amber-800 border-amber-200",
@@ -15,12 +16,22 @@ const colors: Record<string, string> = {
   cancelled: "bg-red-100 text-red-800 border-red-200",
 };
 
-function whatsappText(o: Order): string {
+function bankLines(bank: Bank | null): string {
+  if (!bank || !bank.accountNumber) return "(banking details not set yet, add them in Settings)";
+  return [
+    bank.name && `Bank: ${bank.name}`,
+    bank.accountName && `Account name: ${bank.accountName}`,
+    `Account number: ${bank.accountNumber}`,
+    bank.branchCode && `Branch code: ${bank.branchCode}`,
+  ].filter(Boolean).join("\n");
+}
+
+function whatsappText(o: Order, bank: Bank | null, deposit: number): string {
   const first = o.customer_name.split(" ")[0];
   const when = fmtDate(o.requested_date);
   switch (o.status) {
     case "pending_payment":
-      return `Hi ${first}! Thanks for your Pulp order ${o.order_ref} for ${when}. We're just waiting on your deposit to confirm it. Let us know if you need the banking details again.`;
+      return `Hi ${first}! Thanks for your Pulp order ${o.order_ref} for ${when}. To confirm it, please pay your deposit of ${rand(deposit)} (total ${rand(Number(o.total_zar))}) by EFT within 24 hours:\n${bankLines(bank)}\nPayment reference: ${o.order_ref}\n\nSend us your proof of payment here once it is done. Thank you!`;
     case "confirmed":
       return `Hi ${first}! Your deposit is in and your Pulp order ${o.order_ref} is confirmed for ${when}. We'll let you know when it's ready.`;
     case "ready":
@@ -30,7 +41,7 @@ function whatsappText(o: Order): string {
   }
 }
 
-export default function OrderCard({ order, depositPercent }: { order: Order; depositPercent: number }) {
+export default function OrderCard({ order, depositPercent, bank }: { order: Order; depositPercent: number; bank: Bank | null }) {
   const [status, setStatus] = useState(order.status);
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
@@ -100,8 +111,8 @@ export default function OrderCard({ order, depositPercent }: { order: Order; dep
             {next.label}
           </button>
         )}
-        <a href={waLink(whatsappText({ ...order, status }), toIntlPhone(order.customer_phone))} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-emerald-600 px-4 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-50">
-          WhatsApp
+        <a href={waLink(whatsappText({ ...order, status }, bank, deposit), toIntlPhone(order.customer_phone))} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-emerald-600 px-4 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-50">
+          {status === "pending_payment" ? "Send banking details" : "WhatsApp"}
         </a>
         <select value={status} onChange={(e) => change(e.target.value)} disabled={pending} aria-label="Change status" className="ml-auto rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
           {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}

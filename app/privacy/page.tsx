@@ -1,12 +1,15 @@
 import type { Metadata } from "next";
 import { SHOP, waLink } from "../lib/config";
+import { getSettings } from "../lib/settings";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Privacy & Terms",
   description: "How Pulp looks after your information, and how ordering works.",
 };
 
-const sections: { title: string; body: React.ReactNode }[] = [
+const makeSections = (whatsappIntl: string): { title: string; body: React.ReactNode }[] => [
   {
     title: "Your information is safe",
     body: "We take care of the details you give us. They are stored securely, only the people who run Pulp can see them, and we only keep them for as long as we need them to look after your orders.",
@@ -29,7 +32,7 @@ const sections: { title: string; body: React.ReactNode }[] = [
       <>
         You can ask us what we hold about you, ask us to correct it, or ask us to delete it. Email{" "}
         <a href={`mailto:${SHOP.email}`} className="underline">{SHOP.email}</a> or message us on{" "}
-        <a href={waLink("Hi Pulp!")} className="underline" target="_blank" rel="noopener noreferrer">WhatsApp</a>.
+        <a href={waLink("Hi Pulp!", whatsappIntl)} className="underline" target="_blank" rel="noopener noreferrer">WhatsApp</a>.
       </>
     ),
   },
@@ -43,7 +46,9 @@ const sections: { title: string; body: React.ReactNode }[] = [
   },
 ];
 
-export default function PrivacyPage() {
+export default async function PrivacyPage() {
+  const { contact } = await getSettings();
+  const sections = makeSections(contact.whatsappIntl);
   return (
     <main className="mx-auto w-full max-w-2xl px-6 py-12">
       <a href="/" className="text-xs uppercase tracking-widest text-gray-500 hover:text-pulp-text">← Back to Pulp</a>

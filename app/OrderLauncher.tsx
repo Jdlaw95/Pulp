@@ -13,6 +13,7 @@ type Config = {
   earliestDate: string;
   blackouts: { date: string; reason: string | null }[];
   ordersOpen: boolean;
+  whatsappIntl: string;
 };
 
 const Ctx = createContext<{ open: () => void; ordersOpen: boolean }>({ open: () => {}, ordersOpen: true });
@@ -32,6 +33,7 @@ export function OrderProvider({ children, ...config }: Config & { children: Reac
         depositPercent={config.depositPercent}
         earliestDate={config.earliestDate}
         blackouts={config.blackouts}
+        whatsappIntl={config.whatsappIntl}
       />
     </Ctx.Provider>
   );

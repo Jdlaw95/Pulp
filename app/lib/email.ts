@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { SHOP } from "./config";
+import { getBankDetails, type Bank } from "./bank";
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -17,17 +18,17 @@ export type OrderEmail = {
   depositPercent: number;
 };
 
-function bankBlock(ref: string): string {
-  const acct = process.env.BANK_ACCOUNT_NUMBER;
+function bankBlock(ref: string, bank: Bank): string {
+  const acct = bank.accountNumber;
   if (!acct) {
     console.error("BANK_ACCOUNT_NUMBER is not set; the email tells the customer to expect banking details on WhatsApp.");
     return `<p>We will WhatsApp you our banking details shortly. Please use <strong>${esc(ref)}</strong> as your payment reference.</p>`;
   }
   const rows = [
-    ["Bank", process.env.BANK_NAME || ""],
-    ["Account name", process.env.BANK_ACCOUNT_NAME || SHOP.name],
+    ["Bank", bank.name],
+    ["Account name", bank.accountName || SHOP.name],
     ["Account number", acct],
-    ["Branch code", process.env.BANK_BRANCH_CODE || ""],
+    ["Branch code", bank.branchCode],
   ].filter(([, v]) => v);
   return `
     <table style="font-size:14px;border-collapse:collapse;margin:8px 0;">
@@ -37,6 +38,7 @@ function bankBlock(ref: string): string {
 }
 
 export async function sendOrderEmail(o: OrderEmail) {
+  const bank = await getBankDetails();
   const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
@@ -63,7 +65,7 @@ export async function sendOrderEmail(o: OrderEmail) {
         </ul>
         <div style="background-color: #FDF6E9; padding: 20px; border-radius: 8px; margin: 20px 0;">
           <h3 style="margin-top: 0;">To confirm your order, pay your ${o.depositPercent}% deposit (R${o.deposit.toFixed(2)}) within 24 hours</h3>
-          ${bankBlock(o.ref)}
+          ${bankBlock(o.ref, bank)}
         </div>
         <p>Once we receive your deposit we will confirm your order. We will message you on WhatsApp to arrange collection.</p>
         <p>Warm regards,<br/>The Pulp Team</p>

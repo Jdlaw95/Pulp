@@ -124,15 +124,16 @@ export async function submitOrder(input: OrderInput): Promise<OrderResult> {
     });
     if (itemError) throw new Error(itemError.message);
 
-    let emailSent = true;
-    try {
+    // Banking details are sent by hand on WhatsApp. An email is only sent if Gmail has been set up.
+    let emailSent = false;
+    if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) try {
       const details = `${input.mode === "Custom" ? `Custom selection (${made})` : input.mode}: ${Object.entries(breakdown).map(([n, q]) => `${q}x ${n}`).join(", ")}`;
       await sendOrderEmail({
         to: email, name, ref: order.order_ref, dateLabel: fmtDate(date, { weekday: "long", day: "numeric", month: "long", year: "numeric" }),
         slot, details, giftNote: giftNote || null, total, deposit, depositPercent: settings.deposit_percent,
       });
+      emailSent = true;
     } catch (e) {
-      emailSent = false;
       console.error("Order email failed:", e);
     }
 

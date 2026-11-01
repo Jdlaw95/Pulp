@@ -5,7 +5,7 @@ import { sendMailer } from "../../actions";
 
 const field = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm";
 
-export default function Mailer({ recipients }: { recipients: number }) {
+export default function Mailer({ recipients, emailReady }: { recipients: number; emailReady: boolean }) {
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -22,6 +22,14 @@ export default function Mailer({ recipients }: { recipients: number }) {
     setMsg({ ok: r.ok, text: r.message ?? (r.ok ? "Sent." : "Could not send.") });
     if (r.ok && !test) { setSubject(""); setBody(""); }
   };
+
+  if (!emailReady)
+    return (
+      <section className="rounded-xl border border-gray-200 bg-white p-5">
+        <h2 className="font-serif text-xl">Send a mailer</h2>
+        <p className="text-sm text-gray-600">Email sending is switched off because no email account is connected. You can still export the {recipients} {recipients === 1 ? "person" : "people"} who agreed to marketing, or message them on WhatsApp from the list below.</p>
+      </section>
+    );
 
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-5">

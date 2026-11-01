@@ -31,7 +31,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
         <a href="/admin/customers/export" className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm hover:bg-gray-50">Export marketing list (CSV)</a>
       </div>
 
-      <Mailer recipients={mailable.length} />
+      <Mailer recipients={mailable.length} emailReady={Boolean(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)} />
 
       <div className="flex flex-wrap items-center gap-2">
         <form method="get" className="flex min-w-0 flex-1 gap-2">

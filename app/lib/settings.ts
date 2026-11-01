@@ -1,5 +1,6 @@
 import { publicDb } from "./supabase";
 import { DEFAULT_PRICES, type Prices } from "./pricing";
+import { contactFromRow, defaultContact, type Contact } from "./contact";
 
 export type Settings = {
   orders_open: boolean;
@@ -9,6 +10,7 @@ export type Settings = {
   cutoff_hour: number | null; // after this hour (SAST) the earliest date moves out a day
   pickup_slots: string[];
   deposit_percent: number;
+  contact: Contact; // public WhatsApp number and social links
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -19,6 +21,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cutoff_hour: null,
   pickup_slots: ["Morning (9am to 12pm)", "Afternoon (12pm to 4pm)", "Evening (4pm to 6pm)"],
   deposit_percent: 50,
+  contact: defaultContact(),
 };
 
 type Row = {
@@ -30,6 +33,10 @@ type Row = {
   cutoff_hour?: number | null;
   pickup_slots?: string[] | null;
   deposit_percent?: number | null;
+  whatsapp?: string | null;
+  social_instagram?: string | null;
+  social_facebook?: string | null;
+  social_tiktok?: string | null;
 };
 
 export function rowToSettings(row: Row | null | undefined): Settings {
@@ -46,6 +53,7 @@ export function rowToSettings(row: Row | null | undefined): Settings {
     cutoff_hour: row.cutoff_hour ?? null,
     pickup_slots: row.pickup_slots && row.pickup_slots.length ? row.pickup_slots : d.pickup_slots,
     deposit_percent: row.deposit_percent ?? d.deposit_percent,
+    contact: contactFromRow(row),
   };
 }
 
