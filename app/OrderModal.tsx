@@ -1,228 +1,322 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { submitOrder } from "./actions";
-import { Product } from "./page";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { checkDate, submitOrder, type OrderResult } from "./actions";
+import { boxSize, orderTotal, packSize, priceLabel, type OrderMode, type Prices } from "./lib/pricing";
+import { SHOP, waLink } from "./lib/config";
+import type { Product } from "./lib/types";
 
-export default function OrderModal({ 
-  isOpen, 
-  onClose, 
-  products 
-}: { 
-  isOpen: boolean; 
-  onClose: () => void; 
-  products: Product[] 
-}) {
-  const [orderMode, setOrderMode] = useState<"Trio" | "Box of 6" | "Custom">("Trio");
+type Props = {
+  isOpen: boolean;
+  onClose: () => void;
+  products: Product[];
+  prices: Prices;
+  slots: string[];
+  depositPercent: number;
+  earliestDate: string;
+  blackouts: { date: string; reason: string | null }[];
+};
+
+type Step = 1 | 2 | 3;
+type DateState = { state: "idle" | "checking" | "ok" | "bad"; message?: string; remaining?: number | null };
+
+const inputCls =
+  "w-full rounded-lg border border-pulp-border bg-white px-3 py-3 text-base outline-none transition focus:border-pulp-text focus:ring-2 focus:ring-pulp-text/10";
+const rand = (n: number) => "R" + (Number.isInteger(n) ? n : n.toFixed(2));
+
+export default function OrderModal({ isOpen, onClose, products, prices, slots, depositPercent, earliestDate, blackouts }: Props) {
+  const [step, setStep] = useState<Step>(1);
+  const [mode, setMode] = useState<OrderMode>("Trio");
   const [flavors, setFlavors] = useState<Record<string, number>>({});
-  
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [date, setDate] = useState("");
-  
+  const [slot, setSlot] = useState("");
+  const [giftNote, setGiftNote] = useState("");
+  const [terms, setTerms] = useState(false);
+  const [marketing, setMarketing] = useState(false);
+  const [website, setWebsite] = useState(""); // honeypot
+  const [dateState, setDateState] = useState<DateState>({ state: "idle" });
   const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [result, setResult] = useState<Extract<OrderResult, { success: true }> | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const { total: price, pieces: totalSelected, made } = useMemo(() => orderTotal(mode, flavors, products, prices), [mode, flavors, products, prices]);
+  const boxN = boxSize(mode);
+  const isBox = boxN !== null;
+  const maxAllowed = boxN ?? 60;
+  const remaining = (boxN ?? 0) - totalSelected;
+  const deposit = Math.round(price * depositPercent) / 100;
+  const step1Valid = isBox ? totalSelected === boxN : totalSelected > 0;
 
   useEffect(() => {
-    const initial: Record<string, number> = {};
-    products.forEach(p => initial[p.id] = 0);
-    setFlavors(initial);
+    setFlavors(Object.fromEntries(products.map((p) => [p.id, 0])));
     setErrorMsg("");
-  }, [orderMode, products]);
+  }, [mode, products]);
+
+  // Lock page scroll and close on Escape while the dialog is open.
+  useEffect(() => {
+    if (!isOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && handleClose();
+    window.addEventListener("keydown", onKey);
+    panelRef.current?.focus();
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
+  // Ask the server whether the chosen date is open and has room.
+  useEffect(() => {
+    if (!date || totalSelected === 0) return setDateState({ state: "idle" });
+    let cancelled = false;
+    setDateState({ state: "checking" });
+    checkDate(date, made)
+      .then((r) => !cancelled && setDateState(r.ok ? { state: "ok", remaining: r.remaining } : { state: "bad", message: r.reason }))
+      .catch(() => !cancelled && setDateState({ state: "idle" }));
+    return () => {
+      cancelled = true;
+    };
+  }, [date, totalSelected, made]);
 
   if (!isOpen) return null;
 
-  const totalSelected = Object.values(flavors).reduce((a, b) => a + b, 0);
-  const maxAllowed = orderMode === "Trio" ? 3 : orderMode === "Box of 6" ? 6 : 99; 
-  const remaining = maxAllowed - totalSelected;
+  const blocked = blackouts.find((b) => b.date === date);
+  const step2Valid =
+    name.trim().length > 1 && /^\S+@\S+\.\S+$/.test(email) && phone.replace(/\D/g, "").length >= 9 && !!slot && !!date && dateState.state === "ok" && !blocked;
 
-  let finalPrice = 0;
-  if (orderMode === "Trio") {
-    finalPrice = 75;
-  } else if (orderMode === "Box of 6") {
-    finalPrice = 150;
-  } else {
-    const setsOf6 = Math.floor(totalSelected / 6);
-    const remainder = totalSelected % 6;
-    const setsOf3 = Math.floor(remainder / 3);
-    const singles = remainder % 3;
-    finalPrice = (setsOf6 * 150) + (setsOf3 * 75) + (singles * 28);
-  }
-
-  const minDate = new Date();
-  minDate.setDate(minDate.getDate() + 2);
-  const minDateString = minDate.toISOString().split("T")[0];
-
-  const updateFlavor = (productId: string, change: number) => {
-    const newTotal = totalSelected + change;
-    if (newTotal < 0 || newTotal > maxAllowed) return;
-    
-    setFlavors(prev => ({
-      ...prev,
-      [productId]: Math.max(0, (prev[productId] || 0) + change)
-    }));
-    setErrorMsg(""); 
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const updateFlavor = (id: string, change: number) => {
+    const p = products.find((x) => x.id === id);
+    if (!p) return;
+    const next = totalSelected + change;
+    if (next < 0 || next > maxAllowed || (flavors[id] ?? 0) + change < 0) return;
+    setFlavors((p) => ({ ...p, [id]: (p[id] ?? 0) + change }));
     setErrorMsg("");
-
-    if (orderMode !== "Custom" && totalSelected !== maxAllowed) {
-      setErrorMsg(`Please select exactly ${maxAllowed} flavors.`);
-      return;
-    }
-
-    if (orderMode === "Custom" && totalSelected === 0) {
-      setErrorMsg("Please select at least 1 item.");
-      return;
-    }
-
-    const readableFlavors: Record<string, number> = {};
-    products.forEach(p => {
-      if (flavors[p.id] > 0) readableFlavors[p.name] = flavors[p.id];
-    });
-
-    setLoading(true);
-    const result = await submitOrder({
-      name, email, phone, date, 
-      boxType: orderMode === "Custom" ? "Box of 6" : orderMode, 
-      total: finalPrice,
-      flavors: readableFlavors 
-    });
-
-    setLoading(false);
-
-    if (result.success) {
-      setSuccess(true);
-    } else {
-      setErrorMsg(result.error || "Something went wrong.");
-    }
   };
 
   const handleClose = () => {
-    setSuccess(false);
-    const reset: Record<string, number> = {};
-    products.forEach(p => reset[p.id] = 0);
-    setFlavors(reset);
-    setName(""); setEmail(""); setPhone(""); setDate("");
     onClose();
+    // Reset after the dialog is gone so a finished order does not linger.
+    setTimeout(() => {
+      setStep(1); setMode("Trio"); setResult(null); setErrorMsg("");
+      setName(""); setEmail(""); setPhone(""); setDate(""); setSlot(""); setGiftNote("");
+      setTerms(false); setMarketing(false); setDateState({ state: "idle" });
+    }, 200);
   };
 
+  const handleSubmit = async () => {
+    setErrorMsg("");
+    if (!terms) return setErrorMsg("Please tick the box to agree to the Privacy & Terms.");
+    setLoading(true);
+    const res = await submitOrder({
+      name, email, phone, date, pickupSlot: slot, giftNote, mode, items: flavors,
+      acceptedTerms: terms, marketingConsent: marketing, website,
+    });
+    setLoading(false);
+    if (res.success) setResult(res);
+    else setErrorMsg(res.error);
+  };
+
+  const chosen = products.filter((p) => (flavors[p.id] ?? 0) > 0);
+  const niceDate = date ? new Date(date + "T00:00:00Z").toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }) : "";
+
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: '1rem' }}>
-      <div style={{ backgroundColor: '#FDF6E9', width: '100%', maxWidth: '28rem', borderRadius: '1rem', padding: '1.5rem', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', maxHeight: '90vh', overflowY: 'auto' }}>
-        
-        {success ? (
-          <div style={{ textAlign: 'center', padding: '2rem 0' }}>
-            <h2 style={{ fontSize: '2rem', fontFamily: 'serif', marginBottom: '1rem' }}>Order Received!</h2>
-            <p style={{ fontFamily: 'serif', marginBottom: '1.5rem', color: '#374151' }}>
-              Please check your email. We have sent the banking details and your unique payment reference to confirm your order.
-            </p>
-            <button onClick={handleClose} style={{ backgroundColor: '#111111', color: '#FDF6E9', padding: '0.75rem 2rem', borderRadius: '999px', border: 'none', textTransform: 'uppercase', letterSpacing: '0.1em', fontSize: '0.875rem', cursor: 'pointer' }}>
-              Close
-            </button>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && handleClose()}>
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Place an order"
+        className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-pulp-bg p-6 shadow-2xl outline-none sm:rounded-3xl"
+      >
+        {result ? (
+          <div className="py-4 text-center">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-pulp-green/15 text-2xl text-pulp-green">✓</div>
+            <h2 className="mb-2 font-serif text-3xl">Order received</h2>
+            <p className="mb-5 text-sm text-gray-600">Your reference is</p>
+            <p className="mb-5 inline-block rounded-lg bg-white px-4 py-2 font-mono text-lg font-bold tracking-wider">{result.orderRef}</p>
+            <div className="mb-6 rounded-xl border border-pulp-border bg-white p-4 text-left text-sm leading-relaxed">
+              <p className="mb-1 font-medium">Next step: pay your {depositPercent}% deposit of {rand(result.deposit)} within 24 hours.</p>
+              <p className="text-gray-600">
+                {result.emailSent
+                  ? "We emailed you the banking details. Use your order reference as the payment reference. We confirm your order once the deposit arrives."
+                  : "We could not send your email just now. Tap the button below and we will send the banking details on WhatsApp."}
+              </p>
+            </div>
+            <div className="flex flex-col gap-3">
+              <a
+                href={waLink(`Hi Pulp! I just placed order ${result.orderRef}.`)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-full bg-pulp-green px-6 py-3 text-sm font-medium uppercase tracking-widest text-white transition hover:opacity-90"
+              >
+                Message us on WhatsApp
+              </a>
+              <button onClick={handleClose} className="rounded-full border border-pulp-text px-6 py-3 text-sm uppercase tracking-widest transition hover:bg-pulp-text hover:text-pulp-bg">
+                Close
+              </button>
+            </div>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <h2 style={{ fontSize: '1.5rem', fontFamily: 'serif', margin: 0 }}>Place Order</h2>
-              <button type="button" onClick={handleClose} style={{ background: 'none', border: 'none', fontSize: '1.5rem', color: '#6B7280', cursor: 'pointer' }}>&times;</button>
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.25rem' }}>How would you like to order?</label>
-              <select 
-                value={orderMode} 
-                onChange={(e) => setOrderMode(e.target.value as any)}
-                style={{ width: '100%', padding: '0.75rem', border: '1px solid #E5D9C5', borderRadius: '0.5rem', backgroundColor: 'white', fontSize: '1rem' }}
-              >
-                <option value="Trio">Trio Box (Any 3) - R75</option>
-                <option value="Box of 6">Box of 6 (Any 6) - R150</option>
-                <option value="Custom">Custom Selection (Singles)</option>
-              </select>
-            </div>
-
-            <div style={{ backgroundColor: 'white', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #E5D9C5' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid #E5E7EB', paddingBottom: '0.5rem' }}>
-                <p style={{ fontSize: '0.875rem', fontWeight: '500', margin: 0 }}>Choose Flavors</p>
-                {orderMode !== "Custom" ? (
-                  <span style={{ fontSize: '0.75rem', fontWeight: 'bold', padding: '0.25rem 0.5rem', borderRadius: '999px', backgroundColor: remaining === 0 ? '#D1FAE5' : '#FEF3C7', color: remaining === 0 ? '#065F46' : '#92400E' }}>
-                    {remaining === 0 ? "Perfect!" : `${remaining} remaining`}
-                  </span>
-                ) : totalSelected > 0 && (
-                  <span style={{ fontSize: '0.75rem', fontWeight: 'bold', padding: '0.25rem 0.5rem', borderRadius: '999px', backgroundColor: '#D1FAE5', color: '#065F46' }}>
-                    {totalSelected} items
-                  </span>
-                )}
+          <div className="flex flex-col gap-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-serif text-2xl">Place your order</h2>
+                <p className="text-xs uppercase tracking-widest text-gray-500">Step {step} of 3 · {step === 1 ? "Choose" : step === 2 ? "Your details" : "Review"}</p>
               </div>
-              
-              {products.map((product) => (
-                <div key={product.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                  <span style={{ fontFamily: 'serif', fontSize: '1rem' }}>{product.name} <span style={{ fontSize: '0.75rem', color: '#6B7280', marginLeft: '0.25rem' }}>(R{product.price_zar})</span></span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <button 
-                      type="button" 
-                      onClick={() => updateFlavor(product.id, -1)} 
-                      disabled={!flavors[product.id]}
-                      style={{ width: '2rem', height: '2rem', borderRadius: '50%', border: '1px solid #D1D5DB', backgroundColor: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: flavors[product.id] ? 'pointer' : 'not-allowed', opacity: flavors[product.id] ? 1 : 0.3 }}
-                    >
-                      -
-                    </button>
-                    <span style={{ width: '1rem', textAlign: 'center', fontWeight: '500' }}>{flavors[product.id] || 0}</span>
-                    <button 
-                      type="button" 
-                      onClick={() => updateFlavor(product.id, 1)} 
-                      disabled={remaining === 0}
-                      style={{ width: '2rem', height: '2rem', borderRadius: '50%', border: '1px solid #D1D5DB', backgroundColor: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: remaining === 0 ? 'not-allowed' : 'pointer', opacity: remaining === 0 ? 0.3 : 1 }}
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
+              <button type="button" onClick={handleClose} aria-label="Close" className="text-3xl leading-none text-gray-500 hover:text-pulp-text">&times;</button>
+            </div>
+            <div className="flex gap-1.5" aria-hidden>
+              {[1, 2, 3].map((n) => (
+                <div key={n} className={`h-1 flex-1 rounded-full ${n <= step ? "bg-pulp-text" : "bg-pulp-border"}`} />
               ))}
             </div>
 
-            {/* THE UPSELL NUDGE */}
-            {orderMode === "Custom" && totalSelected === 2 && (
-              <div style={{ backgroundColor: '#ECFDF5', border: '1px solid #10B981', padding: '0.75rem', borderRadius: '0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <span style={{ fontSize: '1.25rem' }}>💡</span>
-                <p style={{ margin: 0, fontSize: '0.875rem', color: '#065F46', lineHeight: '1.4' }}>
-                  <strong>Sweet tip:</strong> Add 1 more fruit to get the Trio Box for R75 (save R9)!
-                </p>
-              </div>
+            {step === 1 && (
+              <>
+                <div className="grid grid-cols-3 gap-2">
+                  {([
+                    ["Trio", "Trio", rand(prices.trio)],
+                    ["Box of 6", "Box of 6", rand(prices.box6)],
+                    ["Custom", "Singles", "Choose any"],
+                  ] as const).map(([value, label, sub]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setMode(value)}
+                      aria-pressed={mode === value}
+                      className={`rounded-xl border px-2 py-3 text-center transition ${mode === value ? "border-pulp-text bg-pulp-text text-pulp-bg" : "border-pulp-border bg-white hover:border-pulp-text"}`}
+                    >
+                      <span className="block font-serif text-base">{label}</span>
+                      <span className="block text-xs opacity-80">{sub}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="rounded-xl border border-pulp-border bg-white p-4">
+                  <div className="mb-3 flex items-center justify-between border-b border-gray-100 pb-2">
+                    <p className="text-sm font-medium">Choose flavours</p>
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${isBox ? (remaining === 0 ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800") : totalSelected > 0 ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-500"}`}>
+                      {isBox ? (remaining === 0 ? "Perfect!" : `${remaining} to go`) : `${totalSelected} selected`}
+                    </span>
+                  </div>
+                  {products.map((p) => (
+                    <div key={p.id} className="mb-3 flex items-center justify-between last:mb-0">
+                      <span className="font-serif text-base">{p.name}<span className="ml-2 font-sans text-xs text-gray-500">{isBox ? (packSize(p) > 1 ? `pack of ${packSize(p)}` : "") : priceLabel(p)}</span></span>
+                      <div className="flex items-center gap-3">
+                        <button type="button" aria-label={`Remove one ${p.name}`} onClick={() => updateFlavor(p.id, -1)} disabled={!flavors[p.id]} className="h-9 w-9 rounded-full border border-gray-300 bg-white text-lg disabled:cursor-not-allowed disabled:opacity-30">−</button>
+                        <span className="w-5 text-center font-medium tabular-nums">{flavors[p.id] || 0}</span>
+                        <button type="button" aria-label={`Add one ${p.name}`} onClick={() => updateFlavor(p.id, 1)} disabled={totalSelected + 1 > maxAllowed} className="h-9 w-9 rounded-full border border-gray-300 bg-white text-lg disabled:cursor-not-allowed disabled:opacity-30">+</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {mode === "Custom" && ((totalSelected === 3 && price > prices.trio) || (totalSelected === 6 && price > prices.box6)) && (
+                  <p className="rounded-xl border border-emerald-500 bg-emerald-50 p-3 text-sm text-emerald-900">
+                    <strong>Sweet tip:</strong> a {totalSelected === 3 ? `Trio is ${rand(prices.trio)}` : `Box of 6 is ${rand(prices.box6)}`}. Switch to the box and save {rand(price - (totalSelected === 3 ? prices.trio : prices.box6))}.
+                  </p>
+                )}
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Total</span>
+                  <span className="font-serif text-2xl">{rand(price)}</span>
+                </div>
+                <button type="button" disabled={!step1Valid} onClick={() => setStep(2)} className="rounded-full bg-pulp-text py-4 text-sm uppercase tracking-widest text-pulp-bg transition disabled:cursor-not-allowed disabled:opacity-40">
+                  Continue
+                </button>
+              </>
             )}
 
-            <input type="text" placeholder="Full Name" required value={name} onChange={e => setName(e.target.value)} style={{ width: '100%', padding: '0.75rem', border: '1px solid #E5D9C5', borderRadius: '0.5rem', backgroundColor: 'white' }} />
-            <input type="email" placeholder="Email Address" required value={email} onChange={e => setEmail(e.target.value)} style={{ width: '100%', padding: '0.75rem', border: '1px solid #E5D9C5', borderRadius: '0.5rem', backgroundColor: 'white' }} />
-            <input type="tel" placeholder="WhatsApp Number" required value={phone} onChange={e => setPhone(e.target.value)} style={{ width: '100%', padding: '0.75rem', border: '1px solid #E5D9C5', borderRadius: '0.5rem', backgroundColor: 'white' }} />
-            
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.25rem' }}>When do you need it?</label>
-              <input 
-                type="date" 
-                required 
-                min={minDateString} 
-                value={date} 
-                onChange={e => setDate(e.target.value)} 
-                style={{ width: '100%', padding: '0.75rem', border: '1px solid #E5D9C5', borderRadius: '0.5rem', backgroundColor: 'white' }} 
-              />
-              <p style={{ fontSize: '0.75rem', color: '#6B7280', marginTop: '0.25rem' }}>Minimum 48 hours notice required.</p>
-            </div>
+            {step === 2 && (
+              <>
+                <input type="text" placeholder="Full name" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} className={inputCls} />
+                <input type="email" placeholder="Email address" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} />
+                <input type="tel" placeholder="WhatsApp number" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} className={inputCls} />
+                {/* Honeypot: hidden from people, bots fill it in. */}
+                <input type="text" tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} className="hidden" aria-hidden />
 
-            {errorMsg && <p style={{ color: '#EF4444', fontSize: '0.875rem', fontWeight: '500', margin: 0 }}>{errorMsg}</p>}
+                <div>
+                  <label className="mb-1 block text-sm font-medium" htmlFor="pulp-date">When would you like to collect?</label>
+                  <input id="pulp-date" type="date" min={earliestDate} value={date} onChange={(e) => setDate(e.target.value)} className={inputCls} />
+                  <p className={`mt-1 text-xs ${dateState.state === "bad" ? "font-medium text-red-600" : dateState.state === "ok" ? "text-emerald-700" : "text-gray-500"}`} role="status">
+                    {dateState.state === "checking" && "Checking availability…"}
+                    {dateState.state === "bad" && dateState.message}
+                    {dateState.state === "ok" && (dateState.remaining != null && dateState.remaining <= 12 ? `Available, only ${dateState.remaining} left that day.` : "That date is available.")}
+                    {dateState.state === "idle" && "We need a little notice to make everything fresh."}
+                  </p>
+                </div>
 
-            <button 
-              type="submit" 
-              disabled={loading || (orderMode !== "Custom" && totalSelected !== maxAllowed) || (orderMode === "Custom" && totalSelected === 0)} 
-              style={{ width: '100%', backgroundColor: '#111111', color: '#FDF6E9', padding: '1rem', borderRadius: '999px', border: 'none', textTransform: 'uppercase', letterSpacing: '0.1em', fontSize: '0.875rem', marginTop: '0.5rem', cursor: (loading || (orderMode !== "Custom" && totalSelected !== maxAllowed) || (orderMode === "Custom" && totalSelected === 0)) ? 'not-allowed' : 'pointer', opacity: (loading || (orderMode !== "Custom" && totalSelected !== maxAllowed) || (orderMode === "Custom" && totalSelected === 0)) ? 0.5 : 1 }}
-            >
-              {loading ? "Processing..." : `Confirm Order - R${finalPrice}`}
-            </button>
-          </form>
+                <div>
+                  <label className="mb-1 block text-sm font-medium" htmlFor="pulp-slot">Collection time</label>
+                  <select id="pulp-slot" value={slot} onChange={(e) => setSlot(e.target.value)} className={inputCls}>
+                    <option value="">Choose a time</option>
+                    {slots.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">We confirm the exact collection details with you on WhatsApp.</p>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-medium" htmlFor="pulp-gift">Gift note <span className="font-normal text-gray-500">(optional)</span></label>
+                  <textarea id="pulp-gift" maxLength={200} rows={2} placeholder="Happy birthday, Sam!" value={giftNote} onChange={(e) => setGiftNote(e.target.value)} className={inputCls} />
+                </div>
+
+                <div className="flex gap-3">
+                  <button type="button" onClick={() => setStep(1)} className="flex-1 rounded-full border border-pulp-text py-4 text-sm uppercase tracking-widest">Back</button>
+                  <button type="button" disabled={!step2Valid} onClick={() => setStep(3)} className="flex-[2] rounded-full bg-pulp-text py-4 text-sm uppercase tracking-widest text-pulp-bg transition disabled:cursor-not-allowed disabled:opacity-40">Review order</button>
+                </div>
+              </>
+            )}
+
+            {step === 3 && (
+              <>
+                <div className="rounded-xl border border-pulp-border bg-white p-4 text-sm">
+                  <p className="mb-2 font-serif text-lg">{mode === "Custom" ? `Custom selection (${totalSelected})` : mode}</p>
+                  <ul className="mb-3 space-y-1 text-gray-700">
+                    {chosen.map((p) => <li key={p.id} className="flex justify-between"><span>{p.name}</span><span>{packSize(p) > 1 ? `${flavors[p.id]} × pack of ${packSize(p)}` : `×${flavors[p.id]}`}</span></li>)}
+                  </ul>
+                  <dl className="space-y-1 border-t border-gray-100 pt-3 text-gray-700">
+                    <div className="flex justify-between gap-4"><dt>Collect</dt><dd className="text-right">{niceDate}, {slot}</dd></div>
+                    <div className="flex justify-between gap-4"><dt>Name</dt><dd>{name}</dd></div>
+                    <div className="flex justify-between gap-4"><dt>WhatsApp</dt><dd>{phone}</dd></div>
+                    <div className="flex justify-between gap-4"><dt>Email</dt><dd>{email}</dd></div>
+                    {giftNote && <div className="flex justify-between gap-4"><dt>Gift note</dt><dd className="text-right">{giftNote}</dd></div>}
+                  </dl>
+                  <div className="mt-3 flex items-baseline justify-between border-t border-gray-100 pt-3">
+                    <span className="font-medium">Total</span>
+                    <span className="font-serif text-2xl">{rand(price)}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">Pay a {depositPercent}% deposit ({rand(deposit)}) by EFT within 24 hours to confirm. Details are emailed after you order.</p>
+                </div>
+
+                <label className="flex items-start gap-3 text-sm">
+                  <input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} className="mt-1 h-4 w-4 accent-pulp-text" />
+                  <span>I agree to the <a href="/privacy" target="_blank" className="underline">Privacy &amp; Terms</a>. <span className="text-red-600">*</span></span>
+                </label>
+                <label className="flex items-start gap-3 text-sm text-gray-700">
+                  <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} className="mt-1 h-4 w-4 accent-pulp-text" />
+                  <span>Send me news and offers from {SHOP.name} by WhatsApp or email. I can opt out any time. <span className="text-gray-500">(optional)</span></span>
+                </label>
+
+                {errorMsg && <p role="alert" className="text-sm font-medium text-red-600">{errorMsg}</p>}
+
+                <div className="flex gap-3">
+                  <button type="button" onClick={() => setStep(2)} disabled={loading} className="flex-1 rounded-full border border-pulp-text py-4 text-sm uppercase tracking-widest">Back</button>
+                  <button type="button" onClick={handleSubmit} disabled={loading || !terms} className="flex-[2] rounded-full bg-pulp-text py-4 text-sm uppercase tracking-widest text-pulp-bg transition disabled:cursor-not-allowed disabled:opacity-40">
+                    {loading ? "Placing order…" : `Confirm order · ${rand(price)}`}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {step !== 3 && errorMsg && <p role="alert" className="text-sm font-medium text-red-600">{errorMsg}</p>}
+          </div>
         )}
       </div>
     </div>

@@ -12,7 +12,26 @@
   --tracking-widest: 0.2em;
 }
 
-body {
-  background-color: #FDF6E9;
-  color: #111111;
+html {
+  scroll-behavior: smooth;
+}
+
+summary {
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* Production list prints cleanly on paper */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+  }
 }
