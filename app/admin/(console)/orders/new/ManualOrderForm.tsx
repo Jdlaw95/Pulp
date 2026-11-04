@@ -2,25 +2,43 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { createManualOrder } from "../../../actions";
+import { createManualOrder, updateOrder } from "../../../actions";
 import { orderTotal, packSize, priceLabel, type OrderMode, type Prices } from "../../../../lib/pricing";
 import { STATUSES, rand, type Product } from "../../../../lib/types";
 
 const field = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm";
 const lbl = "mb-1 block text-xs font-medium text-gray-600";
 
-export default function ManualOrderForm({ products, prices, slots, today }: { products: Product[]; prices: Prices; slots: string[]; today: string }) {
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [mode, setMode] = useState<OrderMode>("Custom");
-  const [items, setItems] = useState<Record<string, number>>({});
-  const [override, setOverride] = useState("");
-  const [date, setDate] = useState(today);
-  const [slot, setSlot] = useState("");
-  const [status, setStatus] = useState("collected");
-  const [gift, setGift] = useState("");
-  const [consent, setConsent] = useState(false);
+export type OrderInitial = {
+  orderId: string;
+  orderRef: string;
+  name: string;
+  phone: string;
+  email: string;
+  mode: OrderMode;
+  items: Record<string, number>;
+  total: number;
+  date: string;
+  slot: string;
+  status: string;
+  gift: string;
+  consent: boolean;
+  unmatched: string[]; // items on the order that no longer match a product
+};
+
+export default function ManualOrderForm({ products, prices, slots, today, initial }: { products: Product[]; prices: Prices; slots: string[]; today: string; initial?: OrderInitial }) {
+  const editing = Boolean(initial);
+  const [name, setName] = useState(initial?.name ?? "");
+  const [phone, setPhone] = useState(initial?.phone ?? "");
+  const [email, setEmail] = useState(initial?.email ?? "");
+  const [mode, setMode] = useState<OrderMode>(initial?.mode ?? "Custom");
+  const [items, setItems] = useState<Record<string, number>>(initial?.items ?? {});
+  const [override, setOverride] = useState(initial ? String(initial.total) : ""); // keeps the price the customer was given
+  const [date, setDate] = useState(initial?.date ?? today);
+  const [slot, setSlot] = useState(initial?.slot ?? "");
+  const [status, setStatus] = useState(initial?.status ?? "collected");
+  const [gift, setGift] = useState(initial?.gift ?? "");
+  const [consent, setConsent] = useState(initial?.consent ?? false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [done, setDone] = useState<string | null>(null);
@@ -39,7 +57,8 @@ export default function ManualOrderForm({ products, prices, slots, today }: { pr
     e.preventDefault();
     setBusy(true);
     setMsg("");
-    const r = await createManualOrder({ name, phone, email, date, slot, mode, items, total: override.trim() === "" ? null : Number(override), status, giftNote: gift, marketingConsent: consent });
+    const payload = { name, phone, email, date, slot, mode, items, total: override.trim() === "" ? null : Number(override), status, giftNote: gift, marketingConsent: consent };
+    const r = initial ? await updateOrder(initial.orderId, payload) : await createManualOrder(payload);
     setBusy(false);
     if (!r.ok) return setMsg(r.message ?? "Could not save");
     setDone(r.orderRef ?? "saved");
@@ -48,9 +67,9 @@ export default function ManualOrderForm({ products, prices, slots, today }: { pr
   if (done)
     return (
       <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-6">
-        <p className="font-medium text-emerald-900">Order {done} added.</p>
+        <p className="font-medium text-emerald-900">Order {done} {editing ? "updated" : "added"}.</p>
         <div className="mt-4 flex gap-3">
-          <button onClick={reset} className="rounded-lg bg-pulp-text px-4 py-2 text-sm text-white">Add another</button>
+          {!editing && <button onClick={reset} className="rounded-lg bg-pulp-text px-4 py-2 text-sm text-white">Add another</button>}
           <Link href="/admin/orders" className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm">Back to orders</Link>
         </div>
       </div>
@@ -58,6 +77,11 @@ export default function ManualOrderForm({ products, prices, slots, today }: { pr
 
   return (
     <form onSubmit={submit} className="grid gap-6 lg:grid-cols-2">
+      {initial && initial.unmatched.length > 0 && (
+        <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 lg:col-span-2">
+          These items on the order no longer match a flavour and were left out: {initial.unmatched.join(", ")}. Add them back below if they should stay.
+        </p>
+      )}
       <div className="space-y-4 rounded-xl border border-gray-200 bg-white p-5">
         <h2 className="font-serif text-xl">Customer</h2>
         <div><label className={lbl} htmlFor="mo-name">Name</label><input id="mo-name" className={field} required value={name} onChange={(e) => setName(e.target.value)} /></div>
@@ -74,6 +98,7 @@ export default function ManualOrderForm({ products, prices, slots, today }: { pr
             <label className={lbl} htmlFor="mo-slot">Time</label>
             <select id="mo-slot" className={field} value={slot} onChange={(e) => setSlot(e.target.value)}>
               <option value="">Not recorded</option>
+              {slot && !slots.includes(slot) && <option value={slot}>{slot}</option>}
               {slots.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
@@ -112,14 +137,14 @@ export default function ManualOrderForm({ products, prices, slots, today }: { pr
         <div>
           <label className={lbl} htmlFor="mo-total">Total (R)</label>
           <input id="mo-total" type="number" min={0} step="0.01" className={field} value={override} onChange={(e) => setOverride(e.target.value)} placeholder={String(calc.total)} />
-          <p className="mt-1 text-xs text-gray-500">Leave empty to use today&apos;s prices ({rand(calc.total)}). Type an amount if this order was charged differently.</p>
+          <p className="mt-1 text-xs text-gray-500">{editing ? `The total stays at what the customer was given. Clear the box to recalculate at current prices (${rand(calc.total)}).` : `Leave empty to use current prices (${rand(calc.total)}). Type an amount if this order was charged differently.`}</p>
         </div>
         <div className="flex items-baseline justify-between border-t border-gray-100 pt-3">
           <span className="font-medium">Total</span>
           <span className="font-serif text-2xl">{rand(Number.isFinite(total) ? total : 0)}</span>
         </div>
         {msg && <p role="alert" className="text-sm font-medium text-red-600">{msg}</p>}
-        <button disabled={busy || calc.units === 0} className="w-full rounded-lg bg-pulp-text py-3 text-sm font-bold text-white disabled:opacity-40">{busy ? "Saving…" : "Save order"}</button>
+        <button disabled={busy || calc.units === 0} className="w-full rounded-lg bg-pulp-text py-3 text-sm font-bold text-white disabled:opacity-40">{busy ? "Saving…" : editing ? "Save changes" : "Save order"}</button>
       </div>
     </form>
   );

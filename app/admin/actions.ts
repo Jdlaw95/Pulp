@@ -196,9 +196,12 @@ export type ManualOrderInput = {
   marketingConsent: boolean;
 };
 
-/** For orders taken outside the website. No emails are sent and the notice, capacity and blackout rules are skipped. */
-export async function createManualOrder(input: ManualOrderInput): Promise<Result & { orderRef?: string }> {
-  const { db } = await requireAdmin();
+type Built =
+  | { ok: false; message: string }
+  | { ok: true; base: Record<string, unknown>; extras: Record<string, unknown>; breakdown: Record<string, number>; total: number; productId: string };
+
+/** Checks the form and works out what to store. Shared by "add order" and "edit order". Notice, capacity and blackout rules are skipped. */
+async function buildOrder(db: Db, input: ManualOrderInput): Promise<Built> {
   const name = input.name.trim();
   const phone = input.phone.trim();
   const email = input.email.trim().toLowerCase();
@@ -234,26 +237,58 @@ export async function createManualOrder(input: ManualOrderInput): Promise<Result
   const breakdown: Record<string, number> = {};
   for (const p of products) if (units[p.id]) breakdown[p.name] = units[p.id] * packSize(p);
 
-  const base = { customer_name: name, customer_email: email, customer_phone: phone, requested_date: input.date, total_zar: total, status: input.status };
-  const extras = { box_type: input.mode, pickup_slot: input.slot.trim() || null, gift_note: input.giftNote.trim() || null, marketing_consent: input.marketingConsent, consent_terms_at: input.marketingConsent ? new Date().toISOString() : null };
-  let res = await db.from("orders").insert({ ...base, ...extras }).select("id, order_ref").single();
-  if (res.error && /column|schema cache/i.test(res.error.message)) res = await db.from("orders").insert(base).select("id, order_ref").single();
+  return {
+    ok: true,
+    total,
+    breakdown,
+    productId: input.mode === "Trio" ? BOX_PRODUCT_IDS.Trio : BOX_PRODUCT_IDS["Box of 6"],
+    base: { customer_name: name, customer_email: email, customer_phone: phone, requested_date: input.date, total_zar: total, status: input.status },
+    extras: { box_type: input.mode, pickup_slot: input.slot.trim() || null, gift_note: input.giftNote.trim() || null, marketing_consent: input.marketingConsent },
+  };
+}
+
+/** For orders taken outside the website. No emails are sent. */
+export async function createManualOrder(input: ManualOrderInput): Promise<Result & { orderRef?: string }> {
+  const { db } = await requireAdmin();
+  const built = await buildOrder(db, input);
+  if (!built.ok) return built;
+
+  const consentStamp = input.marketingConsent ? { consent_terms_at: new Date().toISOString() } : {};
+  let res = await db.from("orders").insert({ ...built.base, ...built.extras, ...consentStamp }).select("id, order_ref").single();
+  if (res.error && /column|schema cache/i.test(res.error.message)) res = await db.from("orders").insert(built.base).select("id, order_ref").single();
   if (res.error || !res.data) return { ok: false, message: (res.error?.message ?? "Could not save the order.") + RLS_HINT };
   const order = res.data as { id: string; order_ref: string };
 
-  const { error: itemErr } = await db.from("order_items").insert({
-    order_id: order.id,
-    product_id: input.mode === "Trio" ? BOX_PRODUCT_IDS.Trio : BOX_PRODUCT_IDS["Box of 6"],
-    quantity: 1,
-    unit_price_zar: total,
-    flavor_breakdown: breakdown,
-  });
+  const { error: itemErr } = await db.from("order_items").insert({ order_id: order.id, product_id: built.productId, quantity: 1, unit_price_zar: built.total, flavor_breakdown: built.breakdown });
   if (itemErr) {
     await db.from("orders").delete().eq("id", order.id); // do not leave an order with no items behind
     return { ok: false, message: itemErr.message + RLS_HINT };
   }
   revalidatePath("/admin", "layout");
   return { ok: true, orderRef: order.order_ref };
+}
+
+/** Changes an existing order. The reference and the date it was placed stay as they were. No emails are sent. */
+export async function updateOrder(orderId: string, input: ManualOrderInput): Promise<Result & { orderRef?: string }> {
+  const { db } = await requireAdmin();
+  const built = await buildOrder(db, input);
+  if (!built.ok) return built;
+
+  let res = await db.from("orders").update({ ...built.base, ...built.extras }).eq("id", orderId).select("id, order_ref");
+  if (res.error && /column|schema cache/i.test(res.error.message)) res = await db.from("orders").update(built.base).eq("id", orderId).select("id, order_ref");
+  if (res.error) return { ok: false, message: res.error.message + RLS_HINT };
+  const row = (res.data ?? [])[0] as { id: string; order_ref: string } | undefined;
+  if (!row) return { ok: false, message: "That order no longer exists." };
+
+  const item = { product_id: built.productId, quantity: 1, unit_price_zar: built.total, flavor_breakdown: built.breakdown };
+  const upd = await db.from("order_items").update(item).eq("order_id", orderId).select("id");
+  if (upd.error) return { ok: false, message: upd.error.message + RLS_HINT };
+  if (!upd.data || upd.data.length === 0) {
+    const ins = await db.from("order_items").insert({ order_id: orderId, ...item });
+    if (ins.error) return { ok: false, message: ins.error.message + RLS_HINT };
+  }
+  revalidatePath("/admin", "layout");
+  return { ok: true, orderRef: row.order_ref };
 }
 
 export async function deleteOrder(orderId: string): Promise<Result> {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { deleteOrder, setOrderStatus } from "../actions";
 import { NEXT_STATUS, STATUSES, formatBreakdown, rand, type Order } from "../../lib/types";
@@ -137,6 +138,7 @@ export default function OrderCard({ order, depositPercent, bank }: { order: Orde
         <select value={status} onChange={(e) => change(e.target.value)} disabled={pending} aria-label="Change status" className="ml-auto rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
           {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
+        <Link href={`/admin/orders/${order.id}/edit`} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50">Edit order</Link>
         {confirmDelete ? (
           <span className="flex items-center gap-2 text-sm">
             <span className="text-red-700">Delete {order.order_ref} for good?</span>
