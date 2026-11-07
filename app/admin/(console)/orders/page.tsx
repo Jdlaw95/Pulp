@@ -32,7 +32,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
         <h1 className="font-serif text-3xl">Orders</h1>
         <div className="flex gap-2">
         <Link href="/admin/orders/new" className="rounded-lg bg-pulp-text px-4 py-2 text-sm text-white hover:bg-black">+ Add order</Link>
-        <a href={`/admin/export${exportQs ? `?${exportQs}` : ""}`} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm hover:bg-gray-50">Export CSV</a>
+        <a href={`/admin/export${exportQs ? `?${exportQs}` : ""}`} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm hover:bg-gray-50">Download PDF</a>
         </div>
       </div>
 

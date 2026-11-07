@@ -2,14 +2,9 @@ import { NextResponse } from "next/server";
 import { hasServiceKey, serverDb } from "../../lib/supabase";
 import { isAllowed, userDb } from "../../lib/auth";
 import { loadOrders } from "../data";
-import { formatBreakdown, statusLabel } from "../../lib/types";
-
-// Spreadsheet programs run text that starts with these as formulas, so defuse them.
-const cell = (v: unknown) => {
-  let s = String(v ?? "");
-  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
-  return `"${s.replace(/"/g, '""')}"`;
-};
+import { formatBreakdown, rand, statusLabel } from "../../lib/types";
+import { fmtDate, todaySAST } from "../../lib/dates";
+import { pdfResponse, tablePdf } from "../../lib/pdf";
 
 export async function GET(request: Request) {
   const authDb = await userDb();
@@ -20,25 +15,52 @@ export async function GET(request: Request) {
   const db = hasServiceKey() ? serverDb() : authDb;
 
   const sp = new URL(request.url).searchParams;
-  const orders = await loadOrders(db, {
+  const filters = {
     q: sp.get("q") ?? undefined,
     status: sp.get("status") ?? undefined,
     from: sp.get("from") ?? undefined,
     to: sp.get("to") ?? undefined,
-  });
+  };
+  const orders = await loadOrders(db, filters);
 
-  const header = ["Order ref", "Ordered", "Collect date", "Collect time", "Status", "Name", "Email", "Phone", "Order", "Gift note", "Total (ZAR)", "Marketing consent"];
-  const rows = orders.map((o) => [
-    o.order_ref, o.created_at, o.requested_date, o.pickup_slot ?? "", statusLabel(o.status), o.customer_name, o.customer_email,
-    o.customer_phone, `${o.box_type ? o.box_type + ": " : ""}${formatBreakdown(o)}`, o.gift_note ?? "", o.total_zar, o.marketing_consent ? "yes" : "no",
-  ]);
-  const csv = [header, ...rows].map((r) => r.map(cell).join(",")).join("\r\n");
+  const parts = [
+    filters.status && filters.status !== "all" ? statusLabel(filters.status) : "All statuses",
+    filters.from || filters.to ? `collecting ${filters.from ? fmtDate(filters.from) : "…"} to ${filters.to ? fmtDate(filters.to) : "…"}` : null,
+    filters.q ? `matching "${filters.q}"` : null,
+  ].filter(Boolean);
+  const total = orders.filter((o) => o.status !== "cancelled").reduce((a, o) => a + Number(o.total_zar), 0);
 
-  return new NextResponse(csv, {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="pulp-orders-${new Date().toISOString().slice(0, 10)}.csv"`,
-      "Cache-Control": "no-store",
+  const pdf = tablePdf({
+    title: "Orders",
+    subtitle: `${orders.length} order${orders.length === 1 ? "" : "s"} · ${parts.join(" · ")} · ${rand(total)} excluding cancelled`,
+    landscape: true,
+    head: ["Ref", "Ordered", "Collect", "Time", "Status", "Customer", "Phone", "Email", "Order", "Gift note", "Total"],
+    rows: orders.map((o) => [
+      o.order_ref,
+      fmtDate(o.created_at.slice(0, 10)),
+      fmtDate(o.requested_date),
+      o.pickup_slot ?? "",
+      statusLabel(o.status),
+      o.customer_name,
+      o.customer_phone,
+      o.customer_email,
+      `${o.box_type ? o.box_type + ": " : ""}${formatBreakdown(o)}`,
+      o.gift_note ?? "",
+      rand(Number(o.total_zar)),
+    ]),
+    columnStyles: {
+      0: { cellWidth: 20 },
+      1: { cellWidth: 17 },
+      2: { cellWidth: 19 },
+      3: { cellWidth: 22 },
+      4: { cellWidth: 20 },
+      5: { cellWidth: 26 },
+      6: { cellWidth: 22 },
+      7: { cellWidth: 40 },
+      9: { cellWidth: 28 },
+      10: { cellWidth: 15, halign: "right" },
     },
   });
+
+  return pdfResponse(pdf, `pulp-orders-${todaySAST()}.pdf`);
 }

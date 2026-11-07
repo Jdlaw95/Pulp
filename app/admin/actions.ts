@@ -52,10 +52,117 @@ export async function setProductionMade(date: string, flavour: string, made: num
   const name = String(flavour ?? "").trim().slice(0, 80);
   if (!name) return { ok: false, message: "Unknown flavour" };
   if (!Number.isInteger(made) || made < 0 || made > 500) return { ok: false, message: "That number looks off" };
+  const before = await db.from("production_progress").select("made").eq("date", date).eq("flavour", name).maybeSingle();
+  const prev = Number((before.data as { made?: number } | null)?.made) || 0;
   const { error } = await db
     .from("production_progress")
     .upsert({ date, flavour: name, made, updated_at: new Date().toISOString() }, { onConflict: "date,flavour" });
   if (error) return { ok: false, message: /relation|schema cache|does not exist/i.test(error.message) ? BOARD_HINT : error.message };
+
+  // Dipping always comes from the freezer: every tick takes one filled piece out, every untick puts it back.
+  const dipped = made - prev;
+  if (dipped !== 0) {
+    const move = await db.from("stock_moves").insert({
+      flavour: name,
+      stage: "filled",
+      change: -dipped,
+      reason: dipped > 0 ? `Dipped for ${date}` : `Unticked on board for ${date}`,
+    });
+    if (move.error && !/relation|schema cache|does not exist/i.test(move.error.message)) console.error("Freezer move failed:", move.error.message);
+  }
+  return { ok: true };
+}
+
+// ---- Freezer -------------------------------------------------------------
+
+const FREEZER_HINT = "The freezer needs new tables. Run supabase/freezer.sql in the Supabase SQL editor, then try again.";
+const freezerError = (m: string) => (/relation|schema cache|does not exist/i.test(m) ? FREEZER_HINT : m);
+const cleanFlavour = (f: unknown) => String(f ?? "").trim().slice(0, 80);
+const okCount = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
+
+type StockResult = Result & { ids?: number[] };
+
+/** Manual stock change: a compote session (+) or a correction (+ or -) on either stage. */
+export async function adjustStock(flavour: string, stage: string, change: number, reason: string): Promise<StockResult> {
+  const { db } = await requireAdmin();
+  const name = cleanFlavour(flavour);
+  if (!name) return { ok: false, message: "Unknown flavour" };
+  if (stage !== "compote" && stage !== "filled") return { ok: false, message: "Unknown stage" };
+  if (!okCount(change, -500, 500) || change === 0) return { ok: false, message: "That number looks off" };
+  const why = String(reason ?? "").trim().slice(0, 120) || "Correction";
+  const { data, error } = await db.from("stock_moves").insert({ flavour: name, stage, change, reason: why }).select("id");
+  if (error) return { ok: false, message: freezerError(error.message) };
+  return { ok: true, ids: (data ?? []).map((r: { id: number }) => r.id) };
+}
+
+/** Adding mousse moves pieces from "compote only" to "ready to dip" in one go. */
+export async function addMousse(flavour: string, pieces: number): Promise<StockResult> {
+  const { db } = await requireAdmin();
+  const name = cleanFlavour(flavour);
+  if (!name) return { ok: false, message: "Unknown flavour" };
+  if (!okCount(pieces, 1, 500)) return { ok: false, message: "Choose between 1 and 500 pieces" };
+
+  const level = await db.from("stock_levels").select("qty").eq("flavour", name).eq("stage", "compote").maybeSingle();
+  if (level.error) return { ok: false, message: freezerError(level.error.message) };
+  const compote = Number((level.data as { qty?: number } | null)?.qty) || 0;
+  if (compote < pieces) {
+    return { ok: false, message: `Only ${Math.max(0, compote)} ${name} compote is logged, so mousse can't go on ${pieces}. Log the compote first, or count the freezer.` };
+  }
+
+  const label = `Added mousse to ${pieces}`;
+  const { data, error } = await db
+    .from("stock_moves")
+    .insert([
+      { flavour: name, stage: "compote", change: -pieces, reason: label },
+      { flavour: name, stage: "filled", change: pieces, reason: label },
+    ])
+    .select("id");
+  if (error) return { ok: false, message: freezerError(error.message) };
+  return { ok: true, ids: (data ?? []).map((r: { id: number }) => r.id) };
+}
+
+/** Stocktake: sets both freezer numbers to what was counted, logging the difference. */
+export async function countFreezer(flavour: string, compote: number, ready: number): Promise<StockResult> {
+  const { db } = await requireAdmin();
+  const name = cleanFlavour(flavour);
+  if (!name) return { ok: false, message: "Unknown flavour" };
+  if (!okCount(compote, 0, 500) || !okCount(ready, 0, 500)) return { ok: false, message: "Counts must be whole numbers from 0 to 500" };
+
+  const levels = await db.from("stock_levels").select("stage, qty").eq("flavour", name);
+  if (levels.error) return { ok: false, message: freezerError(levels.error.message) };
+  const now: Record<string, number> = { compote: 0, filled: 0 };
+  for (const l of (levels.data ?? []) as { stage: string; qty: number }[]) now[l.stage] = Number(l.qty) || 0;
+
+  const rows = [
+    { flavour: name, stage: "compote", change: compote - now.compote, reason: "Freezer count" },
+    { flavour: name, stage: "filled", change: ready - now.filled, reason: "Freezer count" },
+  ].filter((r) => r.change !== 0);
+  if (!rows.length) return { ok: true };
+  const { data, error } = await db.from("stock_moves").insert(rows).select("id");
+  if (error) return { ok: false, message: freezerError(error.message) };
+  return { ok: true, ids: (data ?? []).map((r: { id: number }) => r.id) };
+}
+
+/** Undo the last freezer action by removing the rows it added. */
+export async function undoStock(ids: number[]): Promise<Result> {
+  const { db } = await requireAdmin();
+  const clean = (Array.isArray(ids) ? ids : []).filter((n) => Number.isInteger(n) && n > 0).slice(0, 10);
+  if (!clean.length) return { ok: false, message: "Nothing to undo" };
+  const { error } = await db.from("stock_moves").delete().in("id", clean);
+  if (error) return { ok: false, message: freezerError(error.message) };
+  return { ok: true };
+}
+
+export async function saveStockSetting(flavour: string, mouldSize: number, parCompote: number, parFilled: number): Promise<Result> {
+  const { db } = await requireAdmin();
+  const name = cleanFlavour(flavour);
+  if (!name) return { ok: false, message: "Unknown flavour" };
+  if (!okCount(mouldSize, 1, 60)) return { ok: false, message: "A mould holds 1 to 60 pieces" };
+  if (!okCount(parCompote, 0, 500) || !okCount(parFilled, 0, 500)) return { ok: false, message: "\"Keep at least\" must be 0 to 500" };
+  const { error } = await db
+    .from("stock_settings")
+    .upsert({ flavour: name, mould_size: mouldSize, par_compote: parCompote, par_filled: parFilled }, { onConflict: "flavour" });
+  if (error) return { ok: false, message: freezerError(error.message) };
   return { ok: true };
 }
 

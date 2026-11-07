@@ -1,9 +1,11 @@
+import Link from "next/link";
 import { requireAdmin } from "../../../lib/auth";
 import { getSettings } from "../../../lib/settings";
 import { loadOrders } from "../../data";
 import { addDays, fmtDate, isValidISODate, todaySAST } from "../../../lib/dates";
 import { formatBreakdown, orderBreakdown, orderPieces, statusLabel } from "../../../lib/types";
 import PrintButton from "../PrintButton";
+import { loadStock } from "../../../lib/stock";
 import ProductionBoard, { type BoardRow } from "./ProductionBoard";
 
 export default async function ProductionPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
@@ -41,11 +43,13 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
   const flavours = [...new Set([...Object.keys(tConfirmed), ...Object.keys(tPending)])].sort();
   // Keep flavours that were made but are no longer ordered (e.g. a cancellation) so the spares stay visible.
   const boardNames = [...new Set([...flavours, ...Object.keys(madeBy).filter((f) => madeBy[f] > 0)])].sort();
+  const freezer = await loadStock(db);
   const boardRows: BoardRow[] = boardNames.map((name) => ({
     name,
     need: tConfirmed[name] ?? 0,
     pending: tPending[name] ?? 0,
     made: madeBy[name] ?? 0,
+    frozen: freezer.ok ? freezer.stock[name]?.filled ?? 0 : null,
   }));
   const totalConfirmed = confirmed.reduce((a, o) => a + orderPieces(o), 0);
   const totalPending = pendingOrders.reduce((a, o) => a + orderPieces(o), 0);
@@ -56,10 +60,16 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
       <div className="no-print flex flex-wrap items-end justify-between gap-3">
         <h1 className="font-serif text-3xl">Production list</h1>
         <div className="flex gap-2">
+          <Link href={`?date=${addDays(date, -1)}`} aria-label="Previous day" className="flex items-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm hover:bg-gray-50">
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
+          </Link>
           <form className="flex gap-2" method="get">
-            <input type="date" name="date" defaultValue={date} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm" />
+            <input key={date} type="date" name="date" defaultValue={date} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm" />
             <button className="rounded-lg bg-pulp-text px-4 py-2 text-sm text-white">Go</button>
           </form>
+          <Link href={`?date=${addDays(date, 1)}`} aria-label="Next day" className="flex items-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm hover:bg-gray-50">
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+          </Link>
           <PrintButton />
         </div>
       </div>

@@ -28,7 +28,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
           <h1 className="font-serif text-3xl">Customers</h1>
           <p className="text-sm text-gray-600">{all.length} customers, {all.filter((c) => c.consent).length} agreed to marketing ({mailable.length} with an email).</p>
         </div>
-        <a href="/admin/customers/export" className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm hover:bg-gray-50">Export marketing list (CSV)</a>
+        <a href="/admin/customers/export" className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm hover:bg-gray-50">Download marketing list (PDF)</a>
       </div>
 
       <Mailer recipients={mailable.length} emailReady={Boolean(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)} />

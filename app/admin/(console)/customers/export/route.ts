@@ -3,12 +3,9 @@ import { hasServiceKey, serverDb } from "../../../../lib/supabase";
 import { isAllowed, userDb } from "../../../../lib/auth";
 import { groupCustomers } from "../../../../lib/customers";
 import type { Order } from "../../../../lib/types";
-
-const cell = (v: unknown) => {
-  let s = String(v ?? "");
-  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
-  return `"${s.replace(/"/g, '""')}"`;
-};
+import { rand } from "../../../../lib/types";
+import { fmtDate, todaySAST } from "../../../../lib/dates";
+import { pdfResponse, tablePdf } from "../../../../lib/pdf";
 
 export async function GET() {
   const authDb = await userDb();
@@ -18,9 +15,14 @@ export async function GET() {
 
   const { data } = await db.from("orders").select("id, customer_name, customer_email, customer_phone, total_zar, status, created_at, marketing_consent").limit(5000);
   const list = groupCustomers((data ?? []) as Order[]).filter((c) => c.consent);
-  const csv = [["Name", "Email", "Phone", "Orders", "Spent (ZAR)", "Last order"], ...list.map((c) => [c.name, c.email, c.phone, c.orders, c.spent, c.lastOrder.slice(0, 10)])]
-    .map((r) => r.map(cell).join(",")).join("\r\n");
-  return new NextResponse(csv, {
-    headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="pulp-marketing-list-${new Date().toISOString().slice(0, 10)}.csv"`, "Cache-Control": "no-store" },
+
+  const pdf = tablePdf({
+    title: "Marketing list",
+    subtitle: `${list.length} customer${list.length === 1 ? "" : "s"} who agreed to marketing`,
+    head: ["Name", "Email", "Phone", "Orders", "Spent", "Last order"],
+    rows: list.map((c) => [c.name, c.email, c.phone, c.orders, rand(c.spent), fmtDate(c.lastOrder.slice(0, 10))]),
+    columnStyles: { 3: { halign: "right", cellWidth: 16 }, 4: { halign: "right", cellWidth: 20 }, 5: { cellWidth: 24 } },
   });
+
+  return pdfResponse(pdf, `pulp-marketing-list-${todaySAST()}.pdf`);
 }

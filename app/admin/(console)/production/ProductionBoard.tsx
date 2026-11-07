@@ -2,35 +2,15 @@
 
 import { useRef, useState } from "react";
 import { setProductionMade } from "../../actions";
+import { colourFor } from "../../../lib/colours";
 
 export type BoardRow = {
   name: string;
   need: number; // pieces for confirmed (paid) orders
   pending: number; // extra pieces if unpaid orders confirm
   made: number; // saved progress
+  frozen: number | null; // filled pieces in the freezer (null = freezer not set up)
 };
-
-// Known flavours get their fruit colour; anything else gets a steady colour from its name.
-const KNOWN: [RegExp, string][] = [
-  [/mango/i, "#E8961E"],
-  [/blueberr/i, "#5B4FC4"],
-  [/strawberr/i, "#D9455F"],
-  [/raspberr/i, "#C2306B"],
-  [/pear/i, "#7FA632"],
-  [/passion/i, "#8E44AD"],
-  [/peach|apricot/i, "#F08A5D"],
-  [/kiwi|lime|apple/i, "#4E9F3D"],
-  [/lemon|banana|pineapple/i, "#D4A20B"],
-  [/cherry/i, "#A4161A"],
-];
-const FALLBACK = ["#2A9D8F", "#E76F51", "#6D597A", "#3A86FF", "#B5838D", "#588157"];
-
-function colourFor(name: string) {
-  for (const [re, c] of KNOWN) if (re.test(name)) return c;
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return FALLBACK[h % FALLBACK.length];
-}
 
 export default function ProductionBoard({ date, rows, ready }: { date: string; rows: BoardRow[]; ready: boolean }) {
   const [made, setMade] = useState<Record<string, number>>(() => Object.fromEntries(rows.map((r) => [r.name, r.made])));
@@ -115,6 +95,10 @@ export default function ProductionBoard({ date, rows, ready }: { date: string; r
                   {r.need === 0 ? "None confirmed" : left === 0 ? "Done" : `${left} to go`}
                   {extra > 0 && ` · ${extra} spare`}
                 </p>
+                {r.frozen !== null && (() => {
+                  const inFreezer = r.frozen - (done - r.made);
+                  return <p className={`text-xs ${inFreezer < 0 ? "text-red-700" : inFreezer < left ? "text-amber-700" : "text-gray-400"}`}>{inFreezer} ready to dip in freezer</p>;
+                })()}
               </div>
               <div className="flex flex-1 flex-wrap gap-2">
                 {Array.from({ length: slots }, (_, i) => {
