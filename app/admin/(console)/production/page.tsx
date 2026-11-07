@@ -4,6 +4,7 @@ import { loadOrders } from "../../data";
 import { addDays, fmtDate, isValidISODate, todaySAST } from "../../../lib/dates";
 import { formatBreakdown, orderBreakdown, orderPieces, statusLabel } from "../../../lib/types";
 import PrintButton from "../PrintButton";
+import ProductionBoard, { type BoardRow } from "./ProductionBoard";
 
 export default async function ProductionPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
   const sp = await searchParams;
@@ -31,7 +32,21 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
   };
   const tConfirmed = tally(confirmed);
   const tPending = tally(pendingOrders);
+  // Saved tick-off progress for this date (missing table = board shows but cannot save yet).
+  const progress = await db.from("production_progress").select("flavour, made").eq("date", date);
+  const boardReady = !progress.error;
+  const madeBy: Record<string, number> = {};
+  for (const p of (progress.data ?? []) as { flavour: string; made: number }[]) madeBy[p.flavour] = Number(p.made) || 0;
+
   const flavours = [...new Set([...Object.keys(tConfirmed), ...Object.keys(tPending)])].sort();
+  // Keep flavours that were made but are no longer ordered (e.g. a cancellation) so the spares stay visible.
+  const boardNames = [...new Set([...flavours, ...Object.keys(madeBy).filter((f) => madeBy[f] > 0)])].sort();
+  const boardRows: BoardRow[] = boardNames.map((name) => ({
+    name,
+    need: tConfirmed[name] ?? 0,
+    pending: tPending[name] ?? 0,
+    made: madeBy[name] ?? 0,
+  }));
   const totalConfirmed = confirmed.reduce((a, o) => a + orderPieces(o), 0);
   const totalPending = pendingOrders.reduce((a, o) => a + orderPieces(o), 0);
   const cap = settings.daily_capacity;
@@ -61,7 +76,9 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
         <div className="rounded-xl border border-gray-200 bg-white p-8 text-center text-gray-500">Nothing booked for this day.</div>
       ) : (
         <>
-          <section className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+          <ProductionBoard key={date} date={date} rows={boardRows} ready={boardReady} />
+
+          <section className="print-only overflow-hidden rounded-xl border border-gray-200 bg-white">
             <table className="w-full text-left text-sm">
               <thead className="bg-gray-50 text-xs uppercase tracking-wider text-gray-500">
                 <tr><th className="px-4 py-3">Flavour</th><th className="px-4 py-3 text-right">Make</th><th className="px-4 py-3 text-right">If unpaid confirm</th></tr>

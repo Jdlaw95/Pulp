@@ -35,3 +35,13 @@ summary {
     background: white !important;
   }
 }
+
+/* Shown only on paper (the tick-off board is screen-only) */
+.print-only {
+  display: none;
+}
+@media print {
+  .print-only {
+    display: block !important;
+  }
+}

@@ -41,6 +41,24 @@ export async function setOrderStatus(orderId: string, status: string): Promise<R
   return { ok: true };
 }
 
+// ---- Production board ---------------------------------------------------
+
+const BOARD_HINT = "The production board needs one new table. Run supabase/production-board.sql in the Supabase SQL editor, then try again.";
+
+/** Saves how many of a flavour have been made for a collection date. Called on every tick, so no page revalidation. */
+export async function setProductionMade(date: string, flavour: string, made: number): Promise<Result> {
+  const { db } = await requireAdmin();
+  if (!isValidISODate(date)) return { ok: false, message: "Pick a valid date" };
+  const name = String(flavour ?? "").trim().slice(0, 80);
+  if (!name) return { ok: false, message: "Unknown flavour" };
+  if (!Number.isInteger(made) || made < 0 || made > 500) return { ok: false, message: "That number looks off" };
+  const { error } = await db
+    .from("production_progress")
+    .upsert({ date, flavour: name, made, updated_at: new Date().toISOString() }, { onConflict: "date,flavour" });
+  if (error) return { ok: false, message: /relation|schema cache|does not exist/i.test(error.message) ? BOARD_HINT : error.message };
+  return { ok: true };
+}
+
 // ---- Products ----------------------------------------------------------
 
 export async function toggleProduct(id: string, active: boolean): Promise<Result> {
